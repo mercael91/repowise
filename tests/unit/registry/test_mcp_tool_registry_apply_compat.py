@@ -120,3 +120,18 @@ def test_apply_propagates_unrelated_typeerror():
 
     with pytest.raises(TypeError, match="required keyword-only argument"):
         registry.apply(_BrokenServer())
+
+
+class _NoisyServer:
+    """Stand-in whose ``tool()`` fails for a reason that names the keyword."""
+
+    def tool(self, **kwargs: Any):
+        raise TypeError("structured_output needs a keyword argument map")
+
+
+def test_apply_propagates_typeerror_that_only_mentions_the_keyword():
+    """Mentioning the keyword is not the same as rejecting it."""
+    registry = _make_registry()
+
+    with pytest.raises(TypeError, match="needs a keyword argument map"):
+        registry.apply(_NoisyServer())
