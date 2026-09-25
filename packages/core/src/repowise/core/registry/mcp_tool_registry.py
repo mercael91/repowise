@@ -65,15 +65,23 @@ def _supports_structured_output_kwarg(mcp: Any) -> bool:
     )
 
 
+_UNEXPECTED_KEYWORD_MARKERS = (
+    "unexpected keyword argument 'structured_output'",
+    "unexpected keyword argument \"structured_output\"",
+)
+
+
 def _rejects_structured_output(exc: TypeError) -> bool:
     """Whether *exc* is ``tool()`` refusing the ``structured_output`` keyword.
 
-    Only that specific rejection may be retried without the keyword; every other
-    ``TypeError`` is a genuine failure and has to reach the caller unchanged, so a
-    misconfigured server cannot look like a successful registration.
+    CPython reports an unexpected keyword argument as ``tool() got an unexpected
+    keyword argument 'structured_output'``; matching that specific form, instead of
+    the bare words, keeps a ``TypeError`` raised inside ``tool()`` for any other
+    reason travelling up to the caller, so a misconfigured server cannot look like
+    a successful registration.
     """
     message = str(exc)
-    return "structured_output" in message and "keyword" in message
+    return any(marker in message for marker in _UNEXPECTED_KEYWORD_MARKERS)
 
 
 @dataclass(frozen=True)
