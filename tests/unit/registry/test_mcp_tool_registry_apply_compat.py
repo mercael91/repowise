@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from repowise.core.registry.mcp_tool_registry import MCPToolRegistry
 
 
@@ -103,3 +105,18 @@ def test_applied_tools_serve_no_structured_content():
 
     tools = asyncio.run(server.list_tools())
     assert [(tool.name, tool.outputSchema) for tool in tools] == [("sample_tool", None)]
+
+
+class _BrokenServer:
+    """Stand-in whose ``tool()`` fails for a reason unrelated to the keyword."""
+
+    def tool(self, **kwargs: Any):
+        raise TypeError("tool() missing 1 required keyword-only argument: 'fn'")
+
+
+def test_apply_propagates_unrelated_typeerror():
+    """A ``TypeError`` that does not name the keyword must not be swallowed."""
+    registry = _make_registry()
+
+    with pytest.raises(TypeError, match="required keyword-only argument"):
+        registry.apply(_BrokenServer())
