@@ -65,6 +65,17 @@ def _supports_structured_output_kwarg(mcp: Any) -> bool:
     )
 
 
+def _rejects_structured_output(exc: TypeError) -> bool:
+    """Whether *exc* is ``tool()`` refusing the ``structured_output`` keyword.
+
+    Only that specific rejection may be retried without the keyword; every other
+    ``TypeError`` is a genuine failure and has to reach the caller unchanged, so a
+    misconfigured server cannot look like a successful registration.
+    """
+    message = str(exc)
+    return "structured_output" in message and "keyword" in message
+
+
 @dataclass(frozen=True)
 class ToolRecipe:
     """Compact agent workflow contributed by a tool to the live registry."""
@@ -218,6 +229,8 @@ class MCPToolRegistry:
         The keyword is only passed when the server's ``tool()`` accepts
         it — probed by signature and, failing that, by retrying the call
         without it — so older FastMCP releases keep working unchanged.
+        A ``TypeError`` that does not name the keyword is a genuine
+        failure and propagates unchanged.
         """
         if mcp in self._applied_to:
             return
@@ -227,7 +240,9 @@ class MCPToolRegistry:
             if supports_structured_output:
                 try:
                     decorator = mcp.tool(structured_output=False)
-                except TypeError:
+                except TypeError as exc:
+                    if not _rejects_structured_output(exc):
+                        raise
                     # Signature probing cannot see through every shim: a
                     # ``tool(**kwargs)`` wrapper reaches an older release
                     # that still rejects the keyword, so only the decorator
