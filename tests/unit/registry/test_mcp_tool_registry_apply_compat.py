@@ -2,8 +2,9 @@
 
 The registry registers tools with ``structured_output=False`` so payloads
 cross the wire once. Older FastMCP releases do not accept that keyword, so
-``apply`` must probe the server's ``tool()`` signature and fall back to a
-plain ``mcp.tool()`` call instead of raising ``TypeError``.
+``apply`` must probe the server's ``tool()`` signature, retry without the
+keyword when the probe cannot see through a wrapper, and degrade to a plain
+``mcp.tool()`` call instead of raising ``TypeError``.
 """
 
 from __future__ import annotations
@@ -79,3 +80,26 @@ def test_apply_supports_multiple_servers():
 
     assert first.calls == [{"structured_output": False}]
     assert second.calls == [{}]
+
+
+def test_applied_tools_serve_no_structured_content():
+    """Pin the wire effect of the keyword against a real FastMCP server.
+
+    ``func_metadata`` builds a tool's output schema from the callable it is
+    handed, so the registration keyword — not the tool function — is what
+    drops the duplicate ``{"result": ...}`` ``structuredContent``. Without an
+    output schema there is nothing to wrap, and a client receives the text
+    block alone. A server that silently ignored the keyword would leave every
+    payload crossing the wire twice.
+    """
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    registry = _make_registry()
+    server = FastMCP("compat")
+
+    registry.apply(server)
+
+    tools = asyncio.run(server.list_tools())
+    assert [(tool.name, tool.outputSchema) for tool in tools] == [("sample_tool", None)]
