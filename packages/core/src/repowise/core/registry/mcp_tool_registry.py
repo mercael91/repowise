@@ -43,8 +43,10 @@ def _supports_structured_output_kwarg(mcp: Any) -> bool:
     """Whether *mcp*'s ``tool()`` accepts ``structured_output=``.
 
     Older FastMCP releases predate the keyword; passing it there raises
-    ``TypeError``. Probe the callable's signature so the registry degrades
-    to the previous behaviour instead of breaking registration.
+    ``TypeError``. Probe the callable's signature, and let :meth:`apply`
+    retry without the keyword if the probe cannot see through a wrapper,
+    so the registry degrades to the previous behaviour instead of
+    breaking registration.
     """
     import inspect
 
@@ -214,7 +216,8 @@ class MCPToolRegistry:
         client.
 
         The keyword is only passed when the server's ``tool()`` accepts
-        it, so older FastMCP releases keep working unchanged.
+        it — probed by signature and, failing that, by retrying the call
+        without it — so older FastMCP releases keep working unchanged.
         """
         if mcp in self._applied_to:
             return
@@ -222,7 +225,17 @@ class MCPToolRegistry:
         for entry in self._entries:
             wrapped = middleware(entry.fn) if middleware is not None else entry.fn
             if supports_structured_output:
-                mcp.tool(structured_output=False)(wrapped)
+                try:
+                    decorator = mcp.tool(structured_output=False)
+                except TypeError:
+                    # Signature probing cannot see through every shim: a
+                    # ``tool(**kwargs)`` wrapper reaches an older release
+                    # that still rejects the keyword, so only the decorator
+                    # factory is retried and the rest of the entries are
+                    # registered plainly.
+                    supports_structured_output = False
+                    decorator = mcp.tool()
+                decorator(wrapped)
             else:
                 mcp.tool()(wrapped)
         self._applied_to.append(mcp)
