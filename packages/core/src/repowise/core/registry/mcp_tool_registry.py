@@ -39,6 +39,30 @@ TOOL_TIERS = frozenset({"canonical", "utility", "specialist"})
 TOOL_SAFETY_KINDS = frozenset({"read_only", "generative", "mutating"})
 
 
+def _supports_structured_output_kwarg(mcp: Any) -> bool:
+    """Whether *mcp*'s ``tool()`` accepts ``structured_output=``.
+
+    Older FastMCP releases predate the keyword; passing it there raises
+    ``TypeError``. Probe the callable's signature so the registry degrades
+    to the previous behaviour instead of breaking registration.
+    """
+    import inspect
+
+    tool = getattr(mcp, "tool", None)
+    if tool is None:
+        return False
+    try:
+        signature = inspect.signature(tool)
+    except (TypeError, ValueError):
+        return False
+    if "structured_output" in signature.parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
 @dataclass(frozen=True)
 class ToolRecipe:
     """Compact agent workflow contributed by a tool to the live registry."""
@@ -178,12 +202,29 @@ class MCPToolRegistry:
         this way so the registry stays decoupled from it. A signature-
         preserving wrapper is the caller's responsibility (FastMCP reads
         each tool's signature to build its schema). Defaults to identity.
+
+        Tools are registered with ``structured_output=False`` so each
+        result carries its payload once, as a text block, instead of also
+        duplicating it under ``structuredContent``. The SDK builds the
+        output schema from the callable's return annotation, and the
+        middleware layers snapshot ``__signature__`` with unevaluated
+        annotations, so the SDK falls through to its wrapping case and
+        serves ``{"result": <payload>}`` alongside the text. Disabling
+        structured output removes that duplicate representation for every
+        client.
+
+        The keyword is only passed when the server's ``tool()`` accepts
+        it, so older FastMCP releases keep working unchanged.
         """
         if mcp in self._applied_to:
             return
+        supports_structured_output = _supports_structured_output_kwarg(mcp)
         for entry in self._entries:
             wrapped = middleware(entry.fn) if middleware is not None else entry.fn
-            mcp.tool()(wrapped)
+            if supports_structured_output:
+                mcp.tool(structured_output=False)(wrapped)
+            else:
+                mcp.tool()(wrapped)
         self._applied_to.append(mcp)
 
     def reset(self) -> None:
