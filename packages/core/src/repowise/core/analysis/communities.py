@@ -21,7 +21,7 @@ import networkx as nx
 import structlog
 
 from repowise.core.analysis.kg_curation import GENERIC_ORG_SEGMENTS, dominant_segments
-from repowise.core.ids import is_external
+from repowise.core.ids import ExternalId, is_external, parse
 from repowise.core.ingestion.models import FILE_DEPENDENCY_EDGE_TYPES, SYMBOL_USE_EDGE_TYPES
 from repowise.core.support_paths import is_example_path
 from repowise.core.test_paths import is_test_related_path
@@ -514,6 +514,19 @@ def _assign_tests_to_communities(
 # ---------------------------------------------------------------------------
 
 
+def _is_third_party_node(raw: str) -> bool:
+    """True только для узлов ``external:`` — не для ``framework:``.
+
+    ``is_external`` намеренно покрывает оба вида (``external:`` и ``framework:``,
+    см. ``repowise.core.ids``), но здесь нужен именно третий-сторонний код:
+    framework-узлы остаются в партиции — они не должны НАЗЫВАТЬ сообщество, однако
+    связывают файлы через framework-зависимости (см. комментарий в
+    ``detect_file_communities``). Отсев их заодно с внешними менял бы раскладку
+    сообществ за рамками #2538.
+    """
+    return isinstance(parse(raw), ExternalId)
+
+
 def detect_file_communities(
     graph: nx.DiGraph,
     repo_name: str | None = None,
@@ -536,7 +549,7 @@ def detect_file_communities(
     # Louvain/Leiden partitions depend on iteration order even when seeded.
     file_nodes = sorted(
         n for n, d in graph.nodes(data=True)
-        if d.get("node_type", "file") == "file" and not is_external(n)
+        if d.get("node_type", "file") == "file" and not _is_third_party_node(n)
     )
 
     if not file_nodes:
