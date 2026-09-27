@@ -45,3 +45,23 @@ class TestExternalNodesAreNotMembers:
         assert assignment["pkg/a/f.py"] != assignment["pkg/b/g.py"]
         for ci in info.values():
             assert "external:os" not in ci.members
+
+
+class TestFrameworkNodesStay:
+    """Framework nodes are not third-party code (#2538 is about ``external:``).
+
+    ``is_external`` covers ``external:`` *and* ``framework:``, so filtering with it
+    would drop framework anchor nodes from the partition as well. Those nodes are
+    meant to stay: they must not name a community (see the is_external guard where
+    ``label_members`` is built), but files linked through a framework dependency
+    have to be shaped by it.
+    """
+
+    def test_framework_node_still_reaches_the_partition(self):
+        prod = ["pkg/a/f.py", "pkg/b/g.py"]
+        framework = "framework:django"
+        edges = [(p, framework) for p in prod]
+        assignment, info, _ = detect_file_communities(_graph([*prod, framework], edges))
+
+        assert framework in assignment
+        assert any(framework in ci.members for ci in info.values())
