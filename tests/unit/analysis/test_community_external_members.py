@@ -40,7 +40,7 @@ class TestExternalNodesAreNotMembers:
         # fix the shared external node links them into one community.
         prod = ["pkg/a/f.py", "pkg/b/g.py"]
         edges = [("pkg/a/f.py", "external:os"), ("pkg/b/g.py", "external:os")]
-        assignment, info, _ = detect_file_communities(_graph(prod + ["external:os"], edges))
+        assignment, info, _ = detect_file_communities(_graph([*prod, "external:os"], edges))
 
         assert assignment["pkg/a/f.py"] != assignment["pkg/b/g.py"]
         for ci in info.values():
