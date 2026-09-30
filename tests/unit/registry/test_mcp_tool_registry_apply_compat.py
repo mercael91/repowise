@@ -135,3 +135,74 @@ def test_apply_propagates_typeerror_that_only_mentions_the_keyword():
 
     with pytest.raises(TypeError, match="needs a keyword argument map"):
         registry.apply(_NoisyServer())
+
+
+class _OpaqueWrapper:
+    """Shim that takes ``**kwargs`` and refuses the keyword in its own words.
+
+    The probe cannot tell this apart from a server that accepts the keyword,
+    so registration must survive the refusal by retrying without it — the
+    case the signature probe alone cannot resolve.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def tool(self, **kwargs: Any):
+        if "structured_output" in kwargs:
+            raise TypeError("this shim does not forward structured_output")
+        self.calls.append(kwargs)
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+
+def test_apply_retries_without_keyword_when_wrapper_rejects_it():
+    """A shim refusing the keyword in its own words still registers."""
+    registry = _make_registry()
+    server = _OpaqueWrapper()
+
+    registry.apply(server)
+
+    assert server.calls == [{}]
+
+
+class _PromisedThenBrokeServer:
+    """Signature names the keyword, yet the call raises for another reason."""
+
+    def tool(self, *, structured_output: bool = True):
+        raise TypeError("tool() got an unexpected keyword argument 'name'")
+
+
+def test_apply_propagates_typeerror_from_server_that_declares_the_keyword():
+    """A declared keyword makes the failure genuine: it must not be retried away."""
+    registry = _make_registry()
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'name'"):
+        registry.apply(_PromisedThenBrokeServer())
+
+
+class _FixedArgsServer:
+    """Signature takes fixed arguments only, so the keyword is never passed."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def tool(self, name: str = "x"):
+        self.calls.append({"name": name})
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+
+def test_apply_never_passes_keyword_when_signature_cannot_take_it():
+    registry = _make_registry()
+    server = _FixedArgsServer()
+
+    registry.apply(server)
+
+    assert server.calls == [{"name": "x"}]
