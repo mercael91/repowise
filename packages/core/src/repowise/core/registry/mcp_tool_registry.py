@@ -39,14 +39,23 @@ TOOL_TIERS = frozenset({"canonical", "utility", "specialist"})
 TOOL_SAFETY_KINDS = frozenset({"read_only", "generative", "mutating"})
 
 
-def _supports_structured_output_kwarg(mcp: Any) -> bool:
+def _supports_structured_output_kwarg(mcp: Any) -> bool | None:
     """Whether *mcp*'s ``tool()`` accepts ``structured_output=``.
 
-    Older FastMCP releases predate the keyword; passing it there raises
-    ``TypeError``. Probe the callable's signature, and let :meth:`apply`
-    retry without the keyword if the probe cannot see through a wrapper,
-    so the registry degrades to the previous behaviour instead of
-    breaking registration.
+    Three answers, because two cannot separate "refuses the keyword" from
+    "cannot be told apart from a shim that swallows it":
+
+    ``True``
+        The signature names ``structured_output``, so the keyword is safe.
+        A ``TypeError`` from such a server is a genuine failure.
+    ``False``
+        The signature takes fixed arguments only, so the keyword would be
+        rejected; register plainly without ever calling with it.
+    ``None``
+        The signature cannot settle it — a ``tool(**kwargs)`` shim, or a
+        callable whose signature cannot be read. Call with the keyword and
+        fall back to a plain ``mcp.tool()`` if that call refuses; the retry
+        is what makes the shim case work, without reading error text.
     """
     import inspect
 
@@ -56,32 +65,15 @@ def _supports_structured_output_kwarg(mcp: Any) -> bool:
     try:
         signature = inspect.signature(tool)
     except (TypeError, ValueError):
-        return False
+        return None
     if "structured_output" in signature.parameters:
         return True
-    return any(
+    if any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
-    )
-
-
-_UNEXPECTED_KEYWORD_MARKERS = (
-    "unexpected keyword argument 'structured_output'",
-    "unexpected keyword argument \"structured_output\"",
-)
-
-
-def _rejects_structured_output(exc: TypeError) -> bool:
-    """Whether *exc* is ``tool()`` refusing the ``structured_output`` keyword.
-
-    CPython reports an unexpected keyword argument as ``tool() got an unexpected
-    keyword argument 'structured_output'``; matching that specific form, instead of
-    the bare words, keeps a ``TypeError`` raised inside ``tool()`` for any other
-    reason travelling up to the caller, so a misconfigured server cannot look like
-    a successful registration.
-    """
-    message = str(exc)
-    return any(marker in message for marker in _UNEXPECTED_KEYWORD_MARKERS)
+    ):
+        return None
+    return False
 
 
 @dataclass(frozen=True)
@@ -234,33 +226,35 @@ class MCPToolRegistry:
         structured output removes that duplicate representation for every
         client.
 
-        The keyword is only passed when the server's ``tool()`` accepts
-        it — probed by signature and, failing that, by retrying the call
-        without it — so older FastMCP releases keep working unchanged.
-        A ``TypeError`` that does not name the keyword is a genuine
-        failure and propagates unchanged.
+        The keyword is only passed when the server's ``tool()`` accepts it or
+        cannot say otherwise — probed by signature, and retried without the
+        keyword when the probe is inconclusive — so a ``tool(**kwargs)`` shim
+        over an older release still registers. A ``TypeError`` from a server
+        whose signature *promised* the keyword is a genuine failure and
+        propagates unchanged, and so does one raised by the plain retry.
         """
         if mcp in self._applied_to:
             return
         supports_structured_output = _supports_structured_output_kwarg(mcp)
         for entry in self._entries:
             wrapped = middleware(entry.fn) if middleware is not None else entry.fn
-            if supports_structured_output:
-                try:
-                    decorator = mcp.tool(structured_output=False)
-                except TypeError as exc:
-                    if not _rejects_structured_output(exc):
-                        raise
-                    # Signature probing cannot see through every shim: a
-                    # ``tool(**kwargs)`` wrapper reaches an older release
-                    # that still rejects the keyword, so only the decorator
-                    # factory is retried and the rest of the entries are
-                    # registered plainly.
-                    supports_structured_output = False
-                    decorator = mcp.tool()
-                decorator(wrapped)
-            else:
+            if supports_structured_output is False:
                 mcp.tool()(wrapped)
+                continue
+            try:
+                decorator = mcp.tool(structured_output=False)
+            except TypeError:
+                if supports_structured_output is True:
+                    # The signature names the parameter, so this cannot be a
+                    # refusal of the keyword: it is a real failure and belongs
+                    # to the caller rather than a silent re-registration.
+                    raise
+                # Inconclusive probe: try the call the server can always take.
+                # If this raises too, its error reaches the caller unchanged —
+                # no second guess, no swallowed failure.
+                supports_structured_output = False
+                decorator = mcp.tool()
+            decorator(wrapped)
         self._applied_to.append(mcp)
 
     def reset(self) -> None:
