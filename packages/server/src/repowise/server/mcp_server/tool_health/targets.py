@@ -9,23 +9,35 @@ from repowise.core.analysis.health.complexity.languages import NO_DIALECT_STATUS
 from repowise.server.repo_paths import missing_path_hint
 
 
+def _module_matches(module: str, target: str) -> bool:
+    """True when ``module`` is ``target`` or lives under it.
+
+    A ``module:`` target names a directory, so nested modules such as
+    ``src/auth/login`` must match ``module:src`` as well as ``module:src/auth``.
+    """
+    return module == target or module.startswith(target.rstrip("/") + "/")
+
+
 def _expand_module_targets(
     metrics: list[Any], module_targets: list[str], file_targets: list[str]
 ) -> tuple[list[str], set[str]]:
     """Add every file of each named module to the targets; report which matched.
 
-    The path list is returned untouched (not re-sorted) when no module was
-    named, so a plain file-target call keeps the caller's order.
+    Each module target is matched independently against every metric, so
+    overlapping targets (``src`` and ``src/auth``) both end up in
+    ``matched_modules``. The path list is returned untouched (not re-sorted)
+    when no module was named, so a plain file-target call keeps the caller's
+    order.
     """
     matched_modules: set[str] = set()
     if not module_targets:
         return file_targets, matched_modules
     expanded = list(file_targets)
-    module_set = set(module_targets)
-    for m in metrics:
-        if m.module in module_set:
-            matched_modules.add(m.module)
-            expanded.append(m.file_path)
+    for target in module_targets:
+        for m in metrics:
+            if _module_matches(m.module, target):
+                matched_modules.add(target)
+                expanded.append(m.file_path)
     return sorted(set(expanded)), matched_modules
 
 
